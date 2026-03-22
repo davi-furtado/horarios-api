@@ -63,10 +63,10 @@ cursor.execute('SET FOREIGN_KEY_CHECKS = 1')
 
 connection.commit()
 
-inserir(cursor, 'professores', professores)
-inserir(cursor, 'turmas', turmas)
-inserir(cursor, 'aulas', aulas)
-inserir(cursor, 'aula_professor', aula_professor)
+inserir('professores', professores)
+inserir('turmas', turmas)
+inserir('aulas', aulas)
+inserir('aula_professor', aula_professor)
 
 connection.commit()
 
