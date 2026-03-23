@@ -1,3 +1,5 @@
+Branch destinada a transformação do repositório para funcionar como api e remover a interação com o terminal.
+
 <div align="center">
 <h1>Horários</h1>
 
