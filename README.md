@@ -39,7 +39,7 @@ horarios/
 - Python
 - MySQL
 - mysql-connector-python
-- CSV nativo
+- CSV
 
 ### Arquivos
 
