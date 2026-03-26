@@ -23,6 +23,7 @@ Sistema interativo de terminal em Python para consulta de horários escolares e 
 ```text
 horarios/
 │
+├── .gitignore
 ├── dados/
 │   ├── aula_professor.csv
 │   ├── aulas.csv
