@@ -120,13 +120,13 @@ def listar_turmas():
 
 @app.get('/cursos')
 def listar_cursos():
-    return ['curso1', 'curso2']
+    return ['EM']
 
 
 @app.get('/aulas/turma')
 def aulas_por_turma(
     turma: str = Query(...),
-    dia: Optional[int] = Query(None, ge=0, le=4),
+    dia: Optional[int] = Query(None, ge=1, le=5),
     subturma: Optional[str] = None
 ):
     serie, curso, letra, sub = parse_turma(turma)
@@ -167,7 +167,7 @@ def aulas_por_turma(
 @app.get('/aulas/professor')
 def aulas_por_professor(
     professor: str,
-    dia: Optional[int] = Query(None, ge=0, le=4),
+    dia: Optional[int] = Query(None, ge=1, le=5),
     subturma: Optional[str] = None
 ):
     conn = get_db_connection()
