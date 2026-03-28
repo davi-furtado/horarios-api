@@ -78,6 +78,70 @@ LEFT JOIN professores p ON ap.professor_id = p.id
 '''
 
 
+@app.get('/professores')
+def professores(nome: Optional[str] = None):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        if nome:
+            cursor.execute(
+                'SELECT nome FROM professores WHERE nome LIKE %s ORDER BY nome',
+                (f'%{nome}%',)
+            )
+        else:
+            cursor.execute('SELECT nome FROM professores ORDER BY nome')
+
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get('/materias')
+def materias(nome: Optional[str] = None):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        if nome:
+            cursor.execute(
+                'SELECT nome FROM materias WHERE nome LIKE %s ORDER BY nome',
+                (f'%{nome}%',)
+            )
+        else:
+            cursor.execute('SELECT nome FROM materias ORDER BY nome')
+
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get('/cursos')
+def cursos(nome: Optional[str] = None):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        if nome:
+            cursor.execute(
+                'SELECT nome FROM cursos WHERE nome LIKE %s ORDER BY nome',
+                (f'%{nome}%',)
+            )
+        else:
+            cursor.execute('SELECT nome FROM cursos ORDER BY nome')
+        
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get('/turmas')
+def turmas(turma: Optional[str] = None):
+
+
 @app.get('/aulas')
 def aulas(
     turma: Optional[str] = None,
@@ -132,7 +196,7 @@ def aulas(
         params.append(hora_inicio)
 
     if hora_fim:
-        where += ' AND a.hora_inicio=%s' if where else 'WHERE a.hora_fim=%s'
+        where += ' AND a.hora_fim=%s' if where else 'WHERE a.hora_fim=%s'
         params.append(hora_fim)
 
     query = BASE + f'''
@@ -224,6 +288,48 @@ def entrada_saida(
 
         return response
     finally:
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        where = []
+        params = []
+
+        if turma:
+            serie, curso, letra, subturma = parse_turma(turma)
+
+            where.append('c.nome LIKE %s')
+            params.append(f'%{curso}%')
+
+            if serie:
+                where.append('t.serie=%s')
+                params.append(serie)
+
+            if letra:
+                where.append('t.letra=%s')
+                params.append(letra)
+
+        where = f'WHERE {" AND ".join(where)}' if where else ''
+
+        cursor.execute(f'''
+        SELECT
+            t.serie,
+            c.nome curso,
+            t.letra
+        FROM turmas t
+        JOIN cursos c ON t.curso_id = c.id
+        {where}
+        ORDER BY c.nome, t.serie, t.letra
+        ''', tuple(params))
+
+        turmas = cursor.fetchall()
+        for i, t in enumerate(turmas):
+            turmas[i]['nome'] = '_'.join([str(v) for v in t.values() if v])
+
+        return turmas
+    finally:
+        cursor.close()
+        conn.close()
         cursor.close()
         conn.close()
 
