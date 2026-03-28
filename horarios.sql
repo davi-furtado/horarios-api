@@ -23,17 +23,19 @@ CREATE TABLE cursos (
 CREATE TABLE turmas (
     id INT AUTO_INCREMENT PRIMARY KEY,
     serie TINYINT UNSIGNED,
-    curso_id VARCHAR(100) NOT NULL,
+    curso_id INT(100) NOT NULL,
     letra ENUM('A', 'B', 'C'),
 
     CHECK (serie IS NULL OR serie BETWEEN 1 AND 10),
+
+    UNIQUE (serie, curso_id, letra),
 
     FOREIGN KEY curso_id REFERENCES cursos(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE aulas (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    turma_id INT,
+    turma_id INT NOT NULL,
     materia_id INT,
 
     dia_semana TINYINT UNSIGNED NOT NULL,
@@ -54,6 +56,7 @@ CREATE TABLE aula_professor (
     professor_id INT,
 
     PRIMARY KEY (aula_id, professor_id),
+
     FOREIGN KEY (aula_id) REFERENCES aulas(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (professor_id) REFERENCES professores(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
