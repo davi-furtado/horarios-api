@@ -92,7 +92,3 @@ Script utilitário simples em Python para testar a comunicação com a API, real
    python main.py
    ```
 5. **Testes**: A API estará disponível em `http://localhost:8000`. Acesse a documentação interativa gerada automaticamente pelo FastAPI em `http://localhost:8000/docs` para inspecionar os endpoints e executar testes.
-
-## Licença
-
-Este projeto está sob a licença [MIT](/LICENSE).
