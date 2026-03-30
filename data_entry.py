@@ -54,7 +54,7 @@ aulas = ler_escrever(
         x['subturma'] or ''
     )
 )
-aula_professor = ler_escrever('aula_professor', lambda x: x['professor_id'])
+aula_professor = ler_escrever('aula_professor', lambda x: x['aula_id'])
 
 connection = connect(
     host='localhost',
