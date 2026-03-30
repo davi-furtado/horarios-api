@@ -1,7 +1,16 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from mysql.connector import pooling, Error
-from typing import Optional
+from pydantic import BaseModel
+from typing import List, Optional
+import jwt
+import bcrypt
+from datetime import datetime, timedelta
+
+
+SECRET = 'SECRET_KEY'
+ALGO = 'HS256'
 
 app = FastAPI()
 
@@ -14,13 +23,16 @@ app.add_middleware(
 )
 
 pool = pooling.MySQLConnectionPool(
-    pool_name="mypool",
+    pool_name='mypool',
     pool_size=5,
     host='localhost',
     user='root',
     password='',
     database='horarios'
 )
+
+security = HTTPBearer()
+
 
 def get_db():
     try:
@@ -29,374 +41,259 @@ def get_db():
         raise HTTPException(500, 'Erro no banco')
 
 
-def fmt(h):
-    return str(h)[:-3] if h else None
+def create_token(data: dict):
+    payload = data.copy()
+    payload['exp'] = datetime.utcnow() + timedelta(hours=8)
+    return jwt.encode(payload, SECRET, algorithm=ALGO)
 
 
-def parse_turma(t: str):
-    partes = t.split('_')
-
-    serie = None
-    curso = None
-    letra = None
-    subturma = None
-
-    for p in partes:
-        if p.isdigit():
-            serie = int(p)
-        elif p in ['A', 'B', 'C']:
-            if not letra:
-                letra = p
-            else:
-                subturma = p
-        else:
-            curso = p
-
-    if not curso:
-        raise HTTPException(400, 'Curso é obrigatório')
-
-    return serie, curso, letra, subturma
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET, algorithms=[ALGO])
+        return payload
+    except:
+        raise HTTPException(401, 'Token inválido')
 
 
-BASE = '''
-SELECT
-    a.id,
-    a.dia_semana,
-    a.hora_inicio,
-    a.hora_fim,
-    m.nome materia,
-    GROUP_CONCAT(p.nome) professores,
-    t.serie,
-    c.nome curso,
-    t.letra,
-    a.subturma,
+class Login(BaseModel):
+    username: str
+    password: str
 
-    COALESCE(sa.nome, st.nome) AS sala,
-    COALESCE(sa.tipo, st.tipo) AS tipo_sala
+class AulaCreate(BaseModel):
+    turma_id: int
+    materia_id: Optional[int] = None
+    professores: List[int]
+    dia_semana: int
+    hora_inicio: str
+    hora_fim: str
+    subturma: Optional[str] = None
+    sala_id: Optional[int] = None
 
-FROM aulas a
-JOIN turmas t ON a.turma_id = t.id
-JOIN cursos c ON t.curso_id = c.id
-JOIN materias m ON a.materia_id = m.id
+class Nome(BaseModel):
+    nome: str
 
-LEFT JOIN salas sa ON a.sala_id = sa.id
-LEFT JOIN salas st ON t.sala_id = st.id
 
-LEFT JOIN aula_professor ap ON a.id = ap.aula_id
-LEFT JOIN professores p ON ap.professor_id = p.id
-'''
+def conflito_horario(cur, escola_id, turma_id, professores, dia, hi, hf):
+    cur.execute('''
+        SELECT 1 FROM aulas
+        WHERE escola_id=%s AND turma_id=%s AND dia_semana=%s
+        AND (%s < hora_fim AND %s > hora_inicio)
+    ''', (escola_id, turma_id, dia, hi, hf))
+
+    if cur.fetchone():
+        return 'Conflito de turma'
+
+    for p in professores:
+        cur.execute('''
+            SELECT 1 FROM aulas a
+            JOIN aula_professor ap ON a.id=ap.aula_id
+            WHERE a.escola_id=%s AND ap.professor_id=%s AND a.dia_semana=%s
+            AND (%s < a.hora_fim AND %s > a.hora_inicio)
+        ''', (escola_id, p, dia, hi, hf))
+
+        if cur.fetchone():
+            return f'Conflito professor {p}'
+
+    return None
+
+
+def conflito_restricoes(cur, escola_id, turma_id, professores, dia, hi, hf):
+    cur.execute('''
+        SELECT 1 FROM restricoes_turma
+        WHERE escola_id=%s AND turma_id=%s AND dia_semana=%s
+        AND (%s < hora_fim AND %s > hora_inicio)
+    ''', (escola_id, turma_id, dia, hi, hf))
+
+    if cur.fetchone():
+        return 'Restrição de turma'
+
+    for p in professores:
+        cur.execute('''
+            SELECT 1 FROM restricoes_professor
+            WHERE escola_id=%s AND professor_id=%s AND dia_semana=%s
+            AND (%s < hora_fim AND %s > hora_inicio)
+        ''', (escola_id, p, dia, hi, hf))
+
+        if cur.fetchone():
+            return f'Restrição professor {p}'
+
+    return None
+
+
+@app.post('/login')
+def login(data: Login):
+    conn = get_db()
+    cur = conn.cursor(dictionary=True)
+
+    cur.execute('SELECT * FROM usuarios WHERE username=%s', (data.username,))
+    user = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if not user or not bcrypt.checkpw(data.password.encode(), user['password_hash'].encode()):
+        raise HTTPException(401, 'Credenciais inválidas')
+
+    token = create_token({
+        'user_id': user['id'],
+        'escola_id': user['escola_id'],
+        'role': user['role']
+    })
+
+    return {'token': token}
+
+
+@app.post('/professores')
+def criar_professor(data: Nome, user=Depends(verify_token)):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        'INSERT INTO professores (escola_id, nome) VALUES (%s,%s)',
+        (user['escola_id'], data.nome)
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {'ok': True}
+
+
+@app.post('/materias')
+def criar_materia(data: Nome, user=Depends(verify_token)):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        'INSERT INTO materias (escola_id, nome) VALUES (%s,%s)',
+        (user['escola_id'], data.nome)
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {'ok': True}
+
+
+@app.post('/cursos')
+def criar_curso(data: Nome, user=Depends(verify_token)):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        'INSERT INTO cursos (escola_id, nome) VALUES (%s,%s)',
+        (user['escola_id'], data.nome)
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {'ok': True}
+
+
+@app.post('/aulas')
+def criar_aula(data: AulaCreate, user=Depends(verify_token)):
+    conn = get_db()
+    cur = conn.cursor()
+
+    escola_id = user['escola_id']
+
+    err = conflito_horario(cur, escola_id, data.turma_id, data.professores,
+                           data.dia_semana, data.hora_inicio, data.hora_fim)
+    if err:
+        raise HTTPException(400, err)
+
+    err = conflito_restricoes(cur, escola_id, data.turma_id, data.professores,
+                              data.dia_semana, data.hora_inicio, data.hora_fim)
+    if err:
+        raise HTTPException(400, err)
+
+    cur.execute('''
+        INSERT INTO aulas (
+            escola_id, turma_id, materia_id,
+            dia_semana, hora_inicio, hora_fim,
+            subturma, sala_id
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    ''', (
+        escola_id, data.turma_id, data.materia_id,
+        data.dia_semana, data.hora_inicio, data.hora_fim,
+        data.subturma, data.sala_id
+    ))
+
+    aula_id = cur.lastrowid
+
+    for p in data.professores:
+        cur.execute(
+            'INSERT INTO aula_professor (aula_id, professor_id) VALUES (%s,%s)',
+            (aula_id, p)
+        )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {'id': aula_id}
+
+
+@app.get('/aulas')
+def listar_aulas(
+    dia: Optional[int] = Query(None, ge=1, le=5),
+    user=Depends(verify_token)
+):
+    conn = get_db()
+    cur = conn.cursor(dictionary=True)
+
+    where = ['a.escola_id=%s']
+    params = [user['escola_id']]
+
+    if dia:
+        where.append('a.dia_semana=%s')
+        params.append(dia)
+
+    cur.execute(f'''
+        SELECT a.*, GROUP_CONCAT(p.nome) professores
+        FROM aulas a
+        LEFT JOIN aula_professor ap ON a.id=ap.aula_id
+        LEFT JOIN professores p ON ap.professor_id=p.id
+        WHERE {' AND '.join(where)}
+        GROUP BY a.id
+        ORDER BY a.dia_semana, a.hora_inicio
+    ''', tuple(params))
+
+    result = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return result
+
+
+@app.delete('/aulas/{id}')
+def deletar_aula(id: int, user=Depends(verify_token)):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        'DELETE FROM aulas WHERE id=%s AND escola_id=%s',
+        (id, user['escola_id'])
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {'ok': True}
 
 
 @app.get('/')
 def root():
-    return {
-        'status': 'ok',
-        'api': 'Horários',
-        'endpoints': [
-            '/professores',
-            '/materias',
-            '/cursos',
-            '/turmas',
-            '/salas',
-            '/aulas',
-            '/entrada-saida'
-        ]
-    }
-
-
-@app.get('/professores')
-def professores(nome: Optional[str] = None):
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        if nome:
-            cursor.execute(
-                '''SELECT nome FROM professores 
-                   WHERE MATCH(nome) AGAINST (%s IN BOOLEAN MODE)
-                   ORDER BY nome''',
-                (f'+{nome}*',)
-            )
-        else:
-            cursor.execute('SELECT nome FROM professores ORDER BY nome')
-
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get('/materias')
-def materias(nome: Optional[str] = None):
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        if nome:
-            cursor.execute(
-                '''SELECT nome FROM materias 
-                   WHERE MATCH(nome) AGAINST (%s IN BOOLEAN MODE)
-                   ORDER BY nome''',
-                (f'+{nome}*',)
-            )
-        else:
-            cursor.execute('SELECT nome FROM materias ORDER BY nome')
-
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get('/cursos')
-def cursos(nome: Optional[str] = None):
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        if nome:
-            cursor.execute(
-                '''SELECT nome FROM cursos 
-                   WHERE MATCH(nome) AGAINST (%s IN BOOLEAN MODE)
-                   ORDER BY nome''',
-                (f'+{nome}*',)
-            )
-        else:
-            cursor.execute('SELECT nome FROM cursos ORDER BY nome')
-
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get('/turmas')
-def turmas(turma: Optional[str] = None):
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        where = []
-        params = []
-
-        if turma:
-            serie, curso, letra, _ = parse_turma(turma)
-
-            where.append('MATCH(c.nome) AGAINST (%s IN BOOLEAN MODE)')
-            params.append(f'+{curso}*')
-
-            if serie:
-                where.append('t.serie=%s')
-                params.append(serie)
-
-            if letra:
-                where.append('t.letra=%s')
-                params.append(letra)
-
-        where_sql = f'WHERE {" AND ".join(where)}' if where else ''
-
-        cursor.execute(f'''
-        SELECT t.serie, c.nome curso, t.letra
-        FROM turmas t
-        JOIN cursos c ON t.curso_id = c.id
-        {where_sql}
-        ORDER BY c.nome, t.serie, t.letra
-        ''', tuple(params))
-
-        result = cursor.fetchall()
-
-        for i, t in enumerate(result):
-            result[i]['nome'] = '_'.join([str(v) for v in t.values() if v])
-
-        return result
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get('/salas')
-def salas(nome: Optional[str] = None, tipo: Optional[str] = None):
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        where = []
-        params = []
-
-        if nome:
-            where.append('MATCH(nome) AGAINST (%s IN BOOLEAN MODE)')
-            params.append(f'+{nome}*')
-
-        if tipo:
-            where.append('tipo = %s')
-            params.append(tipo)
-
-        where_sql = f'WHERE {" AND ".join(where)}' if where else ''
-
-        cursor.execute(f'''
-            SELECT nome, tipo
-            FROM salas
-            {where_sql}
-            ORDER BY nome
-        ''', tuple(params))
-
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get('/aulas')
-def aulas(
-    turma: Optional[str] = None,
-    professor: Optional[str] = None,
-    dia: Optional[int] = Query(None, ge=1, le=5),
-    materia: Optional[str] = None,
-    hora_inicio: Optional[str] = None,
-    hora_fim: Optional[str] = None,
-    sala: Optional[str] = None,
-    tipo_sala: Optional[str] = None,
-):
-    where = []
-    params = []
-
-    if turma:
-        serie, curso, letra, subturma = parse_turma(turma)
-
-        where.append('MATCH(c.nome) AGAINST (%s IN BOOLEAN MODE)')
-        params.append(f'+{curso}*')
-
-        if serie:
-            where.append('t.serie=%s')
-            params.append(serie)
-
-        if letra:
-            where.append('t.letra=%s')
-            params.append(letra)
-
-        if subturma:
-            where.append('(a.subturma IS NULL OR a.subturma=%s)')
-            params.append(subturma)
-
-    if professor:
-        where.append('MATCH(p.nome) AGAINST (%s IN BOOLEAN MODE)')
-        params.append(f'+{professor}*')
-
-    if dia:
-        where.append('a.dia_semana=%s')
-        params.append(dia)
-
-    if materia:
-        where.append('MATCH(m.nome) AGAINST (%s IN BOOLEAN MODE)')
-        params.append(f'+{materia}*')
-
-    if hora_inicio:
-        where.append('a.hora_inicio=%s')
-        params.append(hora_inicio)
-
-    if hora_fim:
-        where.append('a.hora_fim=%s')
-        params.append(hora_fim)
-
-    if sala:
-        where.append('MATCH(COALESCE(sa.nome, st.nome)) AGAINST (%s IN BOOLEAN MODE)')
-        params.append(f'+{sala}*')
-
-    if tipo_sala:
-        where.append('COALESCE(sa.tipo, st.tipo) = %s')
-        params.append(tipo_sala)
-
-    where_sql = f'WHERE {" AND ".join(where)}' if where else ''
-
-    query = f'''
-    {BASE}
-    {where_sql}
-    GROUP BY a.id
-    ORDER BY a.dia_semana, a.hora_inicio
-    '''
-
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        cursor.execute(query, tuple(params))
-        response = cursor.fetchall()
-
-        for r in response:
-            r['hora_inicio'] = fmt(r['hora_inicio'])
-            r['hora_fim'] = fmt(r['hora_fim'])
-
-        return response
-    finally:
-        cursor.close()
-        conn.close()
-
-
-@app.get('/entrada-saida')
-def entrada_saida(
-    turma: Optional[str] = None,
-    professor: Optional[str] = None,
-    dia: Optional[int] = Query(None, ge=1, le=5)
-):
-    if not turma and not professor:
-        raise HTTPException(400, 'Informe turma ou professor')
-
-    where = []
-    params = []
-
-    if turma:
-        serie, curso, letra, subturma = parse_turma(turma)
-
-        where.append('MATCH(c.nome) AGAINST (%s IN BOOLEAN MODE)')
-        params.append(f'+{curso}*')
-
-        if serie:
-            where.append('t.serie=%s')
-            params.append(serie)
-
-        if letra:
-            where.append('t.letra=%s')
-            params.append(letra)
-
-        if subturma:
-            where.append('(a.subturma IS NULL OR a.subturma=%s)')
-            params.append(subturma)
-
-    if professor:
-        where.append('MATCH(p.nome) AGAINST (%s IN BOOLEAN MODE)')
-        params.append(f'+{professor}*')
-
-    if dia:
-        where.append('a.dia_semana=%s')
-        params.append(dia)
-
-    query = f'''
-    SELECT
-        a.dia_semana,
-        MIN(a.hora_inicio) entrada,
-        MAX(a.hora_fim) saida
-    FROM aulas a
-    JOIN turmas t ON a.turma_id = t.id
-    JOIN cursos c ON t.curso_id = c.id
-    LEFT JOIN aula_professor ap ON a.id = ap.aula_id
-    LEFT JOIN professores p ON ap.professor_id = p.id
-    WHERE {' AND '.join(where)}
-    GROUP BY a.dia_semana
-    ORDER BY a.dia_semana
-    '''
-
-    conn = get_db()
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        cursor.execute(query, tuple(params))
-        response = cursor.fetchall()
-
-        for r in response:
-            r['entrada'] = fmt(r['entrada'])
-            r['saida'] = fmt(r['saida'])
-
-        return response
-    finally:
-        cursor.close()
-        conn.close()
+    return {'status': 'ok'}
 
 
 if __name__ == '__main__':
-    from uvicorn import run
-    run('main:app', host='0.0.0.0', reload=True)
+    import uvicorn
+    uvicorn.run('main:app', host='0.0.0.0', reload=True)
