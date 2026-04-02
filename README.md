@@ -19,7 +19,7 @@ API em Python (FastAPI) para consulta de horários escolares e turnos de perman�
 
 ## Estrutura do Projeto
 
-O projeto adota uma divisão lógica separando o sistema central da API (`backend/`) da interface gráfica (futura implementação em `frontend/`).
+O projeto adota uma divisão lógica separando o sistema central da API (`backend/`) da interface gráfica (futura implementação).
 
 ```text
 horarios/
@@ -39,8 +39,6 @@ horarios/
 │   ├── requirements.txt
 │   └── select_all.sql
 │
-├── frontend/
-│
 └── README.md
 ```
 
@@ -56,8 +54,6 @@ horarios/
 - Pydantic (Validação e serialização das requisições JSON)
 
 ### Arquivos
-
-#### Diretório `backend/`
 
 - **`dados/*.csv`**: Arquivos da base de dados estática inicial para popular rapidamente turmas, disciplinas, aulas e horários.
 - **`data_entry.py`**: Script utilitário em Python encarregado de injetar os registros dos arquivos `dados/*.csv` diretamente dentro do servidor MySQL local.
@@ -82,4 +78,5 @@ horarios/
    ```bash
    python main.py
    ```
-5. **Autenticação e Testes da Interface (Swagger)**: Diferente de versões anteriores, atente-se à restrição dos painéis via `@app.post('/login')`. Utilize `http://localhost:8000/docs` interagir com os testes do FastAPI, registrar seu usuário (`/users`) e inserir credenciais e o token pelo Authorization Header visualmente na tela de documentação via endpoint `Login`.
+5. **Autenticação e Testes da Interface (Swagger)**: Diferente de versões anteriores, atente-se à restrição dos painéis via `@app.post('/login')`. Utilize `http://localhost:8000/docs` para interagir com os testes do FastAPI, registrar seu usuário (`/users`) e inserir credenciais e o token pelo Authorization Header visualmente na tela de documentação via endpoint `Login`.
+
